@@ -2,6 +2,7 @@ package transport
 
 import (
 	"context"
+	"io"
 	"net"
 	"sync/atomic"
 
@@ -160,9 +161,12 @@ func (t *UDPTransport) writeQuery(conn net.Conn, message *mDNS.Msg, queryId uint
 func (t *UDPTransport) readResponse(conn net.Conn) (*mDNS.Msg, error) {
 	buffer := buf.NewSize(int(t.udpSize.Load()))
 	defer buffer.Release()
-	_, err := buffer.ReadOnceFrom(conn)
+	n, err := buffer.ReadOnceFrom(conn)
 	if err != nil {
 		return nil, err
+	}
+	if n == 0 {
+		return nil, io.ErrUnexpectedEOF
 	}
 	var message mDNS.Msg
 	err = message.Unpack(buffer.Bytes())
