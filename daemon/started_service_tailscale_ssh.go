@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -87,12 +88,15 @@ func (s *StartedService) StartTailscaleSSHSession(
 		return finishWithError(E.Cause(err, "dial peer").Error())
 	}
 
-	var lastBanner string
+	var authBanners []string
 	config := &ssh.ClientConfig{
 		User: start.Username,
 		Auth: nil,
 		BannerCallback: func(message string) error {
-			lastBanner = message
+			banner := strings.TrimSpace(message)
+			if banner != "" && !slices.Contains(authBanners, banner) {
+				authBanners = append(authBanners, banner)
+			}
 			sendMessage(&TailscaleSSHServerMessage{
 				Message: &TailscaleSSHServerMessage_AuthBanner{
 					AuthBanner: &TailscaleSSHAuthBanner{Message: message},
@@ -113,7 +117,7 @@ func (s *StartedService) StartTailscaleSSHSession(
 	sshConn, chans, reqs, err := ssh.NewClientConn(peerConn, peerAddr.String(), config)
 	if err != nil {
 		common.Close(peerConn)
-		banner := strings.TrimSpace(lastBanner)
+		banner := strings.Join(authBanners, "\n")
 		if banner != "" {
 			return finishWithError(banner)
 		}
