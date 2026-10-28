@@ -20,6 +20,54 @@ import (
 	mDNS "github.com/miekg/dns"
 )
 
+func TestQueryMultiplexerExchangeAsyncDoesNotBlockOnDial(t *testing.T) {
+	t.Parallel()
+	dialStarted := make(chan struct{})
+	multiplexer := newQueryMultiplexer(queryMultiplexerOptions{
+		dial: func(ctx context.Context) (net.Conn, error) {
+			close(dialStarted)
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+	})
+	defer multiplexer.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	message := new(mDNS.Msg)
+	message.SetQuestion("probe.test.", mDNS.TypeA)
+	returned := make(chan struct{})
+	callback := make(chan error, 1)
+	go func() {
+		multiplexer.ExchangeAsync(ctx, message, func(_ *mDNS.Msg, err error) {
+			callback <- err
+		})
+		close(returned)
+	}()
+
+	select {
+	case <-dialStarted:
+	case <-time.After(time.Second):
+		t.Fatal("DNS dial did not start")
+	}
+	select {
+	case <-returned:
+	case <-time.After(500 * time.Millisecond):
+		cancel()
+		<-returned
+		t.Fatal("ExchangeAsync blocked on DNS connection establishment")
+	}
+	cancel()
+	select {
+	case err := <-callback:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected canceled dial, got %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("canceled DNS dial did not call back")
+	}
+}
+
 func TestTCPTransportRetriesReadErrorOnReusedConn(t *testing.T) {
 	t.Parallel()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
